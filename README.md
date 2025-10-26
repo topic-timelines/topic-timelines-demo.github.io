@@ -1,2 +1,2 @@
 # topic-timelines-demo.github.io
-Temporary demo
+Temporary repository for paper submission.
