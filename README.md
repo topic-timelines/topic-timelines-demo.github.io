@@ -14,6 +14,14 @@ It is possible to associate a unique hyperlink with each text that has been used
 Code examples
 -------------
 
-Here is code examples for to generate the topics using sentence transformers.
+Here is a code example for how to generate the topics using sentence transformers.
 ![cluster_diabetes_news.py](cluster_diabetes_news.py)
+
+
+Here is a code examples for how to generate timelines for the topics extracted with the previous code.
+![timeline_diabetes_transformer_based.py](timeline_diabetes_transformer_based.py)
+
+=========
+=========
+
 
