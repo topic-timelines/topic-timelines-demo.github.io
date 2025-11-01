@@ -10,3 +10,10 @@ It is possible to associate a unique hyperlink with each text that has been used
 
 ![An example of zooming in and clicking](zoom_in.png)
 
+
+Code examples
+-------------
+
+Here is code examples for to generate the topics using sentence transformers.
+![cluster_diabetes_news.py](cluster_diabetes_news.py)
+
