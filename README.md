@@ -21,7 +21,8 @@ Here is a code example for how to generate the topics using sentence transformer
 Here is a code examples for how to generate timelines for the topics extracted with the previous code.
 ![timeline_diabetes_transformer_based.py](timeline_diabetes_transformer_based.py)
 
-=========
-=========
 
+Comments
+--------
+This is a temporary repository for paper submission. A new version will be provided.
 
