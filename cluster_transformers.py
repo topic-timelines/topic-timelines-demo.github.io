@@ -90,6 +90,9 @@ def get_kmeans(n_clusters, min_nr_of_text_in_cluster):
 
 def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category):
     count_labels = Counter(merged_labels)
+    len_items = len(count_labels.items())
+    if len_items % 100 == 0:
+        print(f"Sorting to find too small topics among {len_items} topics")
     sorted_cluster_results = sorted((value, key) for key, value in count_labels.items() if key != OUTLIER_NUMBER)
     if sorted_cluster_results: #if there are other categories than the outlier one, find the one with smallest number of items
         min_value, min_cluster_label = sorted_cluster_results[0]
@@ -97,6 +100,8 @@ def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids
     if not sorted_cluster_results or min_value >= min_nr_of_text_in_cluster: # smallest cluster is large enough
         return merged_labels, centroids_dict, None # no replace labels
         
+    #print(f"{min_value}, ", end='')
+
     # Remove too small cluster from cluster dict
     centroid_for_cluster_to_remove = centroids_dict[min_cluster_label]
     centroids_dict.pop(min_cluster_label)
@@ -107,8 +112,9 @@ def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids
         cosine_similarity_values = []
         for label_class, centroid in centroids_dict.items():
             # Wikipedia explanation for cosine similarity:
-            # The resulting similarity ranges from −1 meaning exactly opposite, to +1 meaning exactly the same,
-            # with 0 indicating orthogonality or decorrelation
+            # For example, two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0,
+            # and two opposite vectors have a similarity of −1. In some contexts, the component values of the vectors cannot be
+            # negative, in which case the cosine similarity is bounded in [0,1]
             cos_sim = cosine_similarity([centroid_for_cluster_to_remove], [centroid])[0][0]
             cosine_similarity_values.append((cos_sim, label_class))
         sorted_cos_values = sorted(cosine_similarity_values, reverse=True) # Sort, with the largest similarity first
@@ -339,7 +345,8 @@ def encode_sentences(main_path, output_dir, n_clusters,
         recalculate_centroids_after_merge=False,
         fixed_global_min_cos=False,
         high_level_cluster_threshold=0.5,
-        pickled_texts_name=None,
+        pickled_files_name=None,
+        file_name_to_save_text_and_embeddings=None,
         exclude_file_method=None):
     """The main function for clustering files found in "main_path" and write the results in "output_dir".
 
@@ -349,7 +356,7 @@ def encode_sentences(main_path, output_dir, n_clusters,
     it is interpreted as list of paths to different sub-corpora. Seperate output_files will then be generated for each subcorpus,
     but the clustering is performed on all files together. 
     output_dir: Where to save the results.
-    n_clusters: Configuration parameter to the clustering method. Could, e.g. be number of clusters or cosine distance.
+    n_clusters: Configuration parameter to the clustering method. Could, e.g. be number of clusters or cosine distance. (Note that for Agglomerative clustering it is cosine *distance* that is used, i.e., a measure defined as 1-cosine similarity)
     transformer_name: The transformer model to use. Default is "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".
     transform_filename_method: The method for tranforming the name of the .txt-file to a date. (A default method will be added).
     nr_of_words_to_show: The number of words to include in the topic labels. 20 is default.
@@ -366,15 +373,14 @@ def encode_sentences(main_path, output_dir, n_clusters,
         (If False, they are merged with their closes neighbouring cluster.)
     exclude_outlier_label: If the outlier category is to be excluded from the result. Default is False,
     recalculate_centroids_after_merge: If is possible to recalculate cluster centroids after outlier clusters have been merge with neigbours. Default is False,
-    fixed_global_min_cos: Subtract this number from all the cosine distance numbers. Default is False.,
-    high_level_cluster_threshold: The maximum cosine distance when high-level clusters are to be coninued to be merge together 0.5,
-    pickled_texts_name: Read pickled texts to cluster from this file (not yet implemented),
-    exclude_file_method=: A method for deciding files to be included. Default is None.)
+    fixed_global_min_cos: Subtract this number from all the cosine similiarity numbers, that forms the output which defines the prominence for a topic in a text. Default is False. When False, what will be substracted is then instead the minimum cosine similiarity for all texts in the corpus. (A coisine similarity +1 is always used, to avoid negative numbers.)
+    high_level_cluster_threshold: The maximum cosine distance when high-level clusters are to be coninued to be merge together. (Note that cosine distance is used, i.e., 1-cosine similarity) Default=0.5
+    pickled_files_name: The file name for pickled texts and encodded embeddings. When giving this filename, the texts and codings saved here will be used, and the code will start direclty by clustering embeddings. WARNING: If any of the parameter settings for reading the texts and encoding the embeddings have been changed, these changes will not be put into effect, as old ones are used. Default is None.
+    file_name_to_save_text_and_embeddings: If this is given, the read texts, and the embeddings created from these texts are saved in this file. Thereby, this file name can be given to pickled_files_name, and the reading of text files and encoding does not have to be done again. Default is None. (Note that not both file_name_to_save_text_and_embeddings and pickled_files_name can be given.)
+    exclude_file_method: A method for deciding files to be included. Default is None.
 
     """
     
-    if pickled_texts_name:
-        raise NotImplementedError # TODO. This is not yet supported
     
     #https://github.com/joblib/threadpoolctl/blob/master/multiple_openmp.md
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -398,9 +404,17 @@ def encode_sentences(main_path, output_dir, n_clusters,
     if not type(transform_filename_method) == list:
         transform_filename_method = [transform_filename_method]
 
+    if pickled_files_name is not None and file_name_to_save_text_and_embeddings is not None:
+        print("Can't both provive a 'pickled_files_name' and a 'file_name_to_save_text_and_embeddings'")
+        sys.exit()
+        
+    if file_name_to_save_text_and_embeddings is not None:
+        if os.path.exists(file_name_to_save_text_and_embeddings):
+            print(f"There is already a file with the name '{file_name_to_save_text_and_embeddings}'. To avoid overwriting it, either provide another filename to pickle the texts and embeddings, or delete the existing one.")
+            sys.exit()
     # Read the files
-    if not pickled_texts_name:
-        print("No pickled texts, so reading texts from: ", main_path)
+    if not pickled_files_name:
+        print("No pickled data, so reading texts from: ", main_path)
         
         to_cluster = []
         to_cluster_raw_texts = [] # Without preprocessing
@@ -409,41 +423,30 @@ def encode_sentences(main_path, output_dir, n_clusters,
             print("Reading files from: ", corpus_path)
             read_files(corpus_path, to_cluster, to_cluster_raw_texts, preprocess_method, words_to_remove_before_clustering, transform_filename_method_element, exclude_file_method)
         
-        """ # TODO. Not yet supported
-        with open("temp_saved_texts.pkl", 'wb') as save_file:
-            pickle.dump(to_cluster, save_file, protocol=pickle.HIGHEST_PROTOCOL)
-        """
-    else:
-        print("Using texts saved as ", pickled_texts_name)
+          
+        print("Finished reading texts")
         
-        with open(pickled_texts_name, 'rb') as load_file:
-            to_cluster = pickle.load(load_file)
-        
-    """
-    # For the raw texts, no pickling implemented. TODO: Add this to the other pickling
-    to_cluster_raw_texts = []
-    for corpus_path in main_path:
-        files = sorted(glob.glob(os.path.join(os.path.join(corpus_path,"*"), "*.txt")))
-        for file_nr, file_name in enumerate(files):
-            with open(file_name) as fn:
-                text = fn.read()
-                to_cluster_raw_texts.append(text.replace("\n", " "))
-    """
-    
-    print("Finished reading texts")
-    
-    # Encode text
-    print("Using transformer:", transformer_name)
-    print("Loading model")
-    model = SentenceTransformer(transformer_name)
-        
-    print("Encoding embeddings")
-    texts = [text for (filename, text, m_path) in to_cluster]
-    embeddings = model.encode(texts, show_progress_bar=True, convert_to_tensor=False)
-    print("type(embeddings)", type(embeddings))
-    print("Embeddings encoded")
-    print("Created embeddings of shape", embeddings.shape)
+        # Encode text
+        print("Using transformer:", transformer_name)
+        print("Loading model")
+        model = SentenceTransformer(transformer_name)
             
+        print("Encoding embeddings")
+        texts = [text for (filename, text, m_path) in to_cluster]
+        embeddings = model.encode(texts, show_progress_bar=True, convert_to_tensor=False)
+        print("type(embeddings)", type(embeddings))
+        print("Embeddings encoded")
+        print("Created embeddings of shape", embeddings.shape)
+        
+        if file_name_to_save_text_and_embeddings:
+            with open(file_name_to_save_text_and_embeddings, 'wb') as save_file:
+                pickle.dump((to_cluster, to_cluster_raw_texts, embeddings), save_file, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        print("Using saved texts and encoded embeddings in: ", pickled_files_name)
+        
+        with open(pickled_files_name, 'rb') as load_file:
+            to_cluster, to_cluster_raw_texts, embeddings = pickle.load(load_file)
+ 
     print("Clustering")
     clustering = get_clustering_model(n_clusters, min_nr_of_text_in_cluster).fit(embeddings)
     
@@ -459,6 +462,7 @@ def encode_sentences(main_path, output_dir, n_clusters,
     while replaced_label is not None:
         merged_labels, centroids_dict, replaced_label = merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category)
         nr_of_too_small_clusters+=1
+    print()
     print(f"Number of clusters that were too small: {nr_of_too_small_clusters} ")
 
     # Always recalculate the centroid for the outlier category (if such a category is used)
@@ -486,8 +490,9 @@ def encode_sentences(main_path, output_dir, n_clusters,
     
         
     # Wikipedia explanation for cosine similarity:
-    # The resulting similarity ranges from −1 meaning exactly opposite, to +1 meaning exactly the same,
-    # with 0 indicating orthogonality or decorrelation
+    # For example, two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0,
+    # and two opposite vectors have a similarity of −1. In some contexts, the component values of the vectors cannot be
+    # negative, in which case the cosine similarity is bounded in [0,1]
     global_min_cos = 2.0 # Save global min cosine distance for centroid for text
     cos_texts = [] # Store cosine similarity for each text, to the centroid of its cluster
     for label, embedding in zip(merged_labels, embeddings):
@@ -498,7 +503,9 @@ def encode_sentences(main_path, output_dir, n_clusters,
                 pass
             else:
                 global_min_cos = cos
+
     global_min_cos = global_min_cos - 0.001 # so that the smallest will not be 0, when subtracting
+    print("Global minimal cosine simliarity + 1 (two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0 and and two opposite vectors have a similarity of −1)", global_min_cos)
     if fixed_global_min_cos:
         global_min_cos = fixed_global_min_cos
 
