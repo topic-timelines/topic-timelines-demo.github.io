@@ -67,6 +67,7 @@ def get_document_info(texts_topics_file_name, popup_link):
                 column_content = float(column_content)
                 if column_content > 0: # Topic included in this document
                     terms = ""
+                    """
                     if popup_link:
                         if "" in sp:
                             index_for_terms = sp.index("") + topic_nr + 1
@@ -76,6 +77,7 @@ def get_document_info(texts_topics_file_name, popup_link):
                             print("column_content", column_content)
                             print("Error. Row is missing keywords: ", sp)
                             exit()
+                    """
                 
                     topic_info = {}
                     topic_info["terms_found_in_text"] = terms
@@ -256,7 +258,7 @@ def get_spread_between_vertical_lines(hours_between_label_dates):
 # 5. Create a dictionary with spread out timestamps and associated topics
 #########################################################################
 
-def get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_timestamp, user_defined_max_timestamp, spread_distance):
+def get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_timestamp, user_defined_max_timestamp, spread_distance, ignore_collision_with_future_text):
     # Create timestamp_topics_dict
     # Where the each element is a key with a timestamp, and
     # which in turn contains a dictionary of confidence for the
@@ -295,7 +297,8 @@ def get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_tim
             print("The timestamps are spread out so much so that they collide with coming texts. Decrease the 'hours_between_label_dates' value when calling the visualisation")
             print("timestamp", timestamp)
             print("latest_timestamp_used_so_far", latest_timestamp_used_so_far)
-            exit()
+            if not ignore_collision_with_future_text:
+                exit()
         
         # All texts with this timestamp
         base_names = sorted(meta_data_dict[timestamp]) #Collected unsorted, so need to sort here
@@ -308,7 +311,8 @@ def get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_tim
             year = timestamp.astype(object).year
             
             if base_name in document_info:
-                assert(timestamp not in timestamp_topics_dict)
+                if not ignore_collision_with_future_text:
+                    assert(timestamp not in timestamp_topics_dict)
                 timestamp_topics_dict[timestamp] = {}
                             
                 for document_topic in document_info[base_name]:
@@ -330,7 +334,8 @@ def get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_tim
                 base_names_without_associated_topics.append(base_name)
                         
             #To be able to connect timestamps to filename, for links
-            assert(timestamp not in timestamp_basename_dict)
+            if not ignore_collision_with_future_text:
+                assert(timestamp not in timestamp_basename_dict)
             timestamp_basename_dict[timestamp] = base_name
             
             #Create a new timpestamp to spread out texts that would otherwise get the same x-value
@@ -470,35 +475,27 @@ def write_to_outputfile(plt, outputdir, file_name, link_mapping_func, popup_link
             content = orig_file.read()
             p = re.compile('<a xlink:href=".*">')
             matches = p.findall(content)
-            for m in matches:
+            for (nr, m) in enumerate(matches):
+                if nr%100 == 0:
+                    print(f"Replaced {nr} of {len(matches)}")
                 
                 link = m.replace("<a xlink:href=\"", "").replace("\">", "")
                                 
                 title_part = "Click to read text"
                 
-                """ # TODO: Implement popup of important words
+                title_part = "<title>" + link_found_terms_mapping[link] + "</title>" #TODO: Make the title more flexible
                 if popup_link:
-                    if link in link_found_terms_mapping:
-                        
-                        tool_tip_dict = {}
-                        for key, value in link_found_terms_mapping[link].items():
-                            # Another index is shown to the user, so use this index in the tool tip
-                            # Also add by + 1, because start with 1 (not 0) to user
-                            tool_tip_dict[key + 1] = value
-                        
-                        title_part = "<title>" + str(tool_tip_dict) + "</title>"
-                    else:
-                    """
-                title_part = "<title>" + link + "</title>"
+                    popup_link = f'<a href="{link}" target=\'target-window\' onclick="const myWindow = window.open(\'{link}\', \'target-window\', \'width=200,height=150\');window.focus();myWindow.resizeTo(screen.width/5,screen.height)">{title_part}'
+                
+                    content = content.replace(m, popup_link)
+                    suffix = "_popup.html"
                     
-                popup_link = f'<a href="{link}" target=\'target-window\' onclick="const myWindow = window.open(\'{link}\', \'target-window\', \'width=200,height=150\');window.focus();myWindow.resizeTo(screen.width/5,screen.height)">{title_part}'
-                
-                content = content.replace(m, popup_link)
-                
-                
-            with open(os.path.join(outputdir, file_name + "_popup.html"), "w") as write_to:
+                else:
+                    tooltip_link = f'<a href="{link}">{title_part}'
+                    suffix = "_tooltip.html"
+                    content = content.replace(m, tooltip_link)
+            with open(os.path.join(outputdir, file_name + suffix), "w") as write_to:
                 write_to.write(content)
-                
     else:
         save_to_pdf = os.path.join(outputdir, file_name + ".pdf")
         plt.savefig(save_to_pdf, dpi = 700, transparent=False, format="pdf")
@@ -508,7 +505,7 @@ def write_to_outputfile(plt, outputdir, file_name, link_mapping_func, popup_link
 # Start
 ########
 
-def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, label_length=20,  hours_between_label_dates=1, width_vertical_line=0.0000001, extra_x_length=0.000001, order_mapping=None, use_separate_max_confidence_for_each_topic=True, link_mapping_func=None, tip_size=10, marker_transparency=0.4, marker_scale_factor=200, translation_dict = {}, user_defined_min_timestamp=None, user_defined_max_timestamp=None, order_colors=None, fontsize=9,  min_confidence_proportion_to_plot = None, user_topic_numbers_to_include = None, order_mapping_file=None, use_pre_constructed_summaries = False, transparency_vertical_line=0.15):
+def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, label_length=20,  hours_between_label_dates=1, width_vertical_line=0.0000001, extra_x_length=0.000001, order_mapping=None, use_separate_max_confidence_for_each_topic=True, link_mapping_func=None, tip_size=10, marker_transparency=0.4, marker_scale_factor=100, translation_dict = {}, user_defined_min_timestamp=None, user_defined_max_timestamp=None, order_colors=None, fontsize=9,  min_confidence_proportion_to_plot = None, user_topic_numbers_to_include = None, order_mapping_file=None, use_pre_constructed_summaries = False, transparency_vertical_line=0.15, ignore_collision_with_future_text=False, popup_link=True):
     """The main function for plotting the timeline 
 
     Args:
@@ -543,7 +540,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
             return url
     tip_size: float, default=10.
         Governs the size of the clickable small tips of the bars intersecting the circles.
-    marker_transparency: float, default=0.5. 
+    marker_transparency: float, default=0.4. 
         The transparency of the markers (i.e. circles). The default value is optimised for the pdf version. The default value can sometimes be a bit too weak for the html version, so stronger value might sometimes be needed for the html.
     marker_scale_factor: int, default=200, 
         Governs the size of the marker of topic occurrence, i.e. of the circles
@@ -571,9 +568,11 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
         A path to a file with descriptions or a labels for the topics. If this is provided, the normal labels will not be used, but instead these will be used.
     transparency_vertical_line: float, default=0.15.
         The transparency for the vertical line, representing each text. The default is optimimsed for pdf. So a less transparent line might sometimes be relevant for the HTML version.
+    ignore_collision_with_future_text: boolean, default=None
+        WARNING: Usually, this should usually not be set to true. As it will lead to texts colliding with future texts will not be drawn.
+    popup_link: boolean, default=True
+        If true, a second version of the HTML file will be created, with mouse-over tool tips for the links and where the links will open in another window. This file will have the suffix "_popup.html". If false, there will still be tooltips, but no new window will be opened when the user clicks on a link. The file created will then have the suffix "_tooltip.html".
     """
-
-    popup_link = False # TODO: Implement this functionality.
     
     if user_topic_numbers_to_include:
         file_name = file_name + "_topics_" + "_".join([str(i) for i in user_topic_numbers_to_include])
@@ -630,7 +629,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
     
     # 5. Create a dictionary with timestamps spread out and topics
     ##############################################################
-    timestamp_topics_dict, timestamp_terms_found_dict, link_found_terms_mapping, timestamp_basename_dict = get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_timestamp, user_defined_max_timestamp, spread_distance)
+    timestamp_topics_dict, timestamp_terms_found_dict, link_found_terms_mapping, timestamp_basename_dict = get_timestamp_topic_dict(meta_data_dict, document_info, user_defined_min_timestamp, user_defined_max_timestamp, spread_distance, ignore_collision_with_future_text)
 
     # 6. Determine min and max timestamps
     ######################################
@@ -808,7 +807,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
                 cw2 = bar_height*confidence/max_topic_confidence
             
             # The actual circle, showing the strength of the topic for the text
-            s1 = ax1.scatter([timestamp], [ty], color=[0, 0, 0, marker_transparency], facecolor=[0, 0, 0, marker_transparency/5], marker="o", s=cw2*cw2*marker_scale_factor, linewidth=0.1, zorder=-cw2*20)
+            s1 = ax1.scatter([timestamp], [ty], color=[0, 0, 0, marker_transparency], facecolor=[0, 0, 0, marker_transparency/5], marker="o", s=cw2*marker_scale_factor, linewidth=0.1, zorder=-cw2*20)
             # The line intersecting the circle
             ax1.plot([timestamp, timestamp], [ty + cw2, ty - cw2], '-', markersize=0, color = [0, 0, 0, marker_transparency], linewidth=width_vertical_line, zorder = -2*cw2)
              # The two tips at the end of the lines intersecting the circle
@@ -821,7 +820,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
                 s2.set_urls([link, link])
                 
                 
-                link_found_terms_mapping[link] = timestamp_terms_found_dict[timestamp]
+                link_found_terms_mapping[link] = timestamp_basename_dict[timestamp]
                
             nr_of_plotted = nr_of_plotted + 1
             if nr_of_plotted % 100 == 0:
