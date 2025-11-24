@@ -156,7 +156,7 @@ def get_order_mapping_flattend(order_list):
 # 3. Getting the names of the topics
 #####################################
 
-def get_topic_names(labels, translation_dict, file_name, outputdir, label_length, order_mapping_flattened, use_pre_constructed_summaries):
+def get_topic_names(labels, translation_dict, file_name, outputdir, label_length, order_mapping_flattened, use_pre_constructed_summaries, use_orig_nr):
     # Give the topics the labels to show to the user and the number for the topic to show to the user
     topic_names = []
     long_topic_names = []
@@ -212,7 +212,10 @@ def get_topic_names(labels, translation_dict, file_name, outputdir, label_length
                 mapped_nr = ""
             if len(nr_str) == 1:
                 nr_str = " " + nr_str
-            final_topic_name = nr_str + ": " + topic_name
+            if use_orig_nr:
+                final_topic_name = nr_str + ": " + topic_name
+            else:
+                final_topic_name = topic_name
             topic_names.append(final_topic_name)
         if not os.path.exists(outputdir):
             os.mkdir(outputdir)
@@ -369,18 +372,18 @@ def get_min_max_timestamp(meta_data_dict, user_defined_min_timestamp, user_defin
     if user_defined_max_timestamp:
         max_timestamp = np.datetime64(user_defined_max_timestamp)
         
-    min_timestamp = min_timestamp - (max_timestamp - min_timestamp)*extra_x_length
-    max_timestamp = max_timestamp + (max_timestamp - min_timestamp)*extra_x_length
+    min_timestamp = min_timestamp - np.timedelta64(int(extra_x_length), 'D')
+    max_timestamp = max_timestamp + np.timedelta64(int(extra_x_length), 'D')
 
     print("min_timestamp", min_timestamp)
     print("max_timestamp", max_timestamp)
     
-    min_year = min_timestamp.astype(object).year + 1
-    max_year = max_timestamp.astype(object).year + 1
-    years_to_plot = range(min_year, max_year)
+    #min_year = min_timestamp.astype(object).year - 1
+    #max_year = max_timestamp.astype(object).year + 1
+    #years_to_plot = range(min_year, max_year)
     
 
-    return min_timestamp, max_timestamp, min_year, max_year, years_to_plot
+    return min_timestamp, max_timestamp #, min_year, max_year #, years_to_plot
 
 ####################################
 # 7. Functions related to colour use
@@ -433,11 +436,11 @@ def get_color_mapping(topic_names, order_mapping, order_colors):
                 color_mapping_stronger[user_topic_nr] = order_colors[current_index_in_order_colors]
                 color_mapping[user_topic_nr] = get_weaker_form_of_named_color(order_colors[current_index_in_order_colors], 0.09 + how_much_weaker)
                 how_much_weaker = how_much_weaker * -1
+                
             if current_color_number != previous_color_number: #color is updated
                 
                 current_index_in_order_colors = current_index_in_order_colors + 1
                 how_much_weaker = 0.02
-                
                 ys_when_color_is_updated.append(el)
                 
                 if current_simplifyed_color == get_weaker_form_of_named_color("lavender", 0.4):
@@ -505,7 +508,7 @@ def write_to_outputfile(plt, outputdir, file_name, link_mapping_func, popup_link
 # Start
 ########
 
-def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, label_length=20,  hours_between_label_dates=1, width_vertical_line=0.0000001, extra_x_length=0.000001, order_mapping=None, use_separate_max_confidence_for_each_topic=True, link_mapping_func=None, tip_size=10, marker_transparency=0.4, marker_scale_factor=100, translation_dict = {}, user_defined_min_timestamp=None, user_defined_max_timestamp=None, order_colors=None, fontsize=9,  min_confidence_proportion_to_plot = None, user_topic_numbers_to_include = None, order_mapping_file=None, use_pre_constructed_summaries = False, transparency_vertical_line=0.15, ignore_collision_with_future_text=False, popup_link=True):
+def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, label_length=20,  hours_between_label_dates=1, width_vertical_line=0.0000001, extra_x_length=0.000001, order_mapping=None, use_separate_max_confidence_for_each_topic=True, link_mapping_func=None, tip_size=10, marker_transparency=0.4, marker_scale_factor=100, translation_dict = {}, user_defined_min_timestamp=None, user_defined_max_timestamp=None, order_colors=None, fontsize=9,  min_confidence_proportion_to_plot = None, user_topic_numbers_to_include = None, order_mapping_file=None, use_pre_constructed_summaries = False, transparency_vertical_line=0.15, ignore_collision_with_future_text=False, popup_link=True, color_file=None, use_orig_nr=True):
     """The main function for plotting the timeline 
 
     Args:
@@ -572,6 +575,9 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
         WARNING: Usually, this should usually not be set to true. As it will lead to texts colliding with future texts will not be drawn.
     popup_link: boolean, default=True
         If true, a second version of the HTML file will be created, with mouse-over tool tips for the links and where the links will open in another window. This file will have the suffix "_popup.html". If false, there will still be tooltips, but no new window will be opened when the user clicks on a link. The file created will then have the suffix "_tooltip.html".
+    color_file: str, default=None
+        A file path to a file where colours for the topics are stored
+    use_orig_nr: boolean, default=True. When there is a re-ordering of the topics, the numbers associated with the topics will not appear in their original order. If use_orig_nr: is set to False, these original file numbers will not be shown. Instead, the topic will be given numbers in accordance with the order in which they appear.
     """
     
     if user_topic_numbers_to_include:
@@ -595,8 +601,8 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
     meta_data_dict, min_timestamp, max_timestamp = get_meta_data_from_dict(base_name_timestamp_mapping_dict)
     print("Nr of documents found", len(document_info.items()))
     
-    # 2. Get and check user ordering of the topics
-    ###############################################
+    # 2. Get and check user ordering of the topics and colours
+    ############################################################
     if order_mapping_file and order_mapping:
         raise ValueError("Not possible to provide both an order_mapping_file and an order_mapping as arguments")
     if order_mapping_file:
@@ -607,10 +613,19 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
         order_mapping_flattened = get_order_mapping_flattend(order_mapping)
     else:
         order_mapping_flattened = None
+        
+    if color_file and order_colors:
+        raise ValueError("Not possible to provide both a color_file and order_colors as arguments")
+    if color_file:
+        with open(color_file) as cf:
+            color_str = cf.read().strip()
+            print(color_str)
+            order_colors = json.loads(color_str)
+        
             
     # 3. Give the topics the labels to show to the user and the number for the topic to show to the user
     #####################################################################################################
-    topic_names = get_topic_names(labels, translation_dict, file_name, outputdir, label_length, order_mapping_flattened, use_pre_constructed_summaries)
+    topic_names = get_topic_names(labels, translation_dict, file_name, outputdir, label_length, order_mapping_flattened, use_pre_constructed_summaries, use_orig_nr)
     print("Nr of topic names found:", len(topic_names))
     if order_mapping_flattened:
         try:
@@ -633,7 +648,8 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
 
     # 6. Determine min and max timestamps
     ######################################
-    min_timestamp, max_timestamp, min_year, max_year, years_to_plot = get_min_max_timestamp(meta_data_dict, user_defined_min_timestamp, user_defined_max_timestamp, extra_x_length)
+    # min_year, max_year, years_to_plot
+    min_timestamp, max_timestamp = get_min_max_timestamp(meta_data_dict, user_defined_min_timestamp, user_defined_max_timestamp, extra_x_length)
     
     # 7. Make a colour mapping
     ############################
@@ -643,7 +659,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
     #################################
     fig, ax1 = plt.subplots(figsize = (15, 8))
     ax1.set(ylim=(-len(topic_names) - 0.5, 0.5))
-    #ax1.set(xlim=(min_timestamp-20, max_timestamp+20))
+    fig.tight_layout()
 
     plt.gca().xaxis.set_major_locator(mdates.YearLocator())
     plt.gca().xaxis.set_minor_locator(mdates.MonthLocator())
@@ -677,8 +693,9 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
         topic_names_resorted_only_numbers[y] = str(user_topic_nr + 1)
         ty = -y
         
-        # The horizontal line in the middle of each topic
-        plt.axhline(y=ty, linewidth=0.1, color='black', zorder = -50)
+       
+        # The horizontal line in the middle of each topic TODO: Probably remove this
+        #plt.axhline(y=ty, linewidth=0.1, color='black', zorder = -50)
         
         current_color = color_mapping[user_topic_nr + 1]
         
@@ -688,6 +705,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
         # The colored filling
         if order_mapping:
             ax1.fill([min_timestamp, max_timestamp, max_timestamp, min_timestamp, min_timestamp], [ty - y_width, ty - y_width, ty + y_width, ty + y_width, ty - y_width], color = current_color, edgecolor = edgecolor, linewidth=0.2, linestyle="solid", zorder = -10000)
+            plt.axhline(y=ty + y_width, linewidth=0.3, color=edgecolor, zorder = -50)
         else:
             ax1.fill([min_timestamp, max_timestamp, max_timestamp, min_timestamp, min_timestamp], [ty - y_width, ty - y_width, ty + y_width, ty + y_width, ty - y_width], color = current_color, linewidth=0.1, linestyle="solid", zorder = -10000)
             if current_color == get_weaker_form_of_named_color("lavender", 0.4):
@@ -695,20 +713,27 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
                 dots_color = "mediumpurple"
             else:
                 dots_color = "darkseagreen"
-                    
+              
+            """
             for year_to_plot in years_to_plot:
                 first_day = np.datetime64(str(year_to_plot) + "-01-01")
                 middle_year = np.datetime64(str(year_to_plot) + "-07-01")
                 ax1.scatter(first_day,-y-y_width, color=dots_color, zorder=-50, marker='D', s=0.1)
                 ax1.scatter(middle_year,-y-y_width, color=dots_color, zorder=-50, marker='D', s=0.005)
+            """
+    """
     for year_to_plot in years_to_plot:
         first_day = np.datetime64(str(year_to_plot) + "-01-01")
         middle_year = np.datetime64(str(year_to_plot) + "-07-01")
         ax1.scatter(first_day, 0+y_width, color="mediumpurple", zorder=-50, marker='D', s=0.1)
         ax1.scatter(middle_year, 0+y_width, color="mediumpurple", zorder=-50, marker='D', s=0.01)
-    
+    """
+    if not use_orig_nr: # TODO: Find a better solution for this
+        for i in range(0, len(topic_names_resorted)):
+            topic_names_resorted[i] = str(i+1) + ": " + topic_names_resorted[i]
     print(topic_names_resorted)
     print(len(topic_names_resorted))
+    separting_line_color_nr = 0
     # lines separating the colors
     if order_mapping:
         separating_color = "mediumpurple"
@@ -720,9 +745,13 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
                 else:
                     separating_color = "mediumpurple"
                 plt.axhline(y=-y-y_width, linewidth=1, color=separating_color, zorder = -40)
+        else:
+            for y in ys_when_color_is_updated[:-1]: # TODO: This does not look so good when using user defined colours.
+                plt.axhline(y=-y-y_width, linewidth=1, color=order_colors[separting_line_color_nr], zorder = -40)
+                separting_line_color_nr += 1
         plt.axhline(y=-ys_when_color_is_updated[-1]-y_width, linewidth=1, color="black", zorder = -40) # End with a black line
-        plt.yticks([+y_width] + [-y-y_width for y in ys_when_color_is_updated], [], minor=False) # Mark color change with y-tick-lines also
-        plt.yticks([-y for y in range(0, len(topic_names), 1)], topic_names_resorted)
+        #plt.yticks([+y_width] + [-y-y_width for y in ys_when_color_is_updated], [], minor=False) # Mark color change with y-tick-lines also
+        plt.yticks([-y for y in range(0, len(topic_names), 1)], topic_names_resorted, minor=False)
     else:
         plt.yticks([-y for y in range(0, len(topic_names), 1)], topic_names_resorted, minor=False)
     
@@ -732,15 +761,18 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
     ax1.yaxis.tick_right()
     
     # Add topic number in small letters to the left
+    """
     for y in range(0, len(topic_names)):
         if order_mapping_flattened:
             ax1.text(min_timestamp-15, -y, order_mapping_flattened[y], fontsize=fontsize-1)
         else:
             ax1.text(min_timestamp-15, -y, str(y+1), fontsize=fontsize-1)
-        
+    """
  
+    # TODO: Probalby remove this
     # Make colors markings in the beginning and end of the timeline
     # And extra horisonal, dotted lines when 'order_mapping' is given
+    """
     if order_mapping:
         striped_transpar = 1
         for y in range(0, len(topic_names)):
@@ -763,6 +795,7 @@ def make_plot_from_files(label_file, texts_topics_file, outputdir, file_name, la
                 striped_transpar = 0
             else:
                 striped_transpar = 1
+    """
             
     print("Created background")
     
