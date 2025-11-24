@@ -39,8 +39,11 @@ if __name__ == '__main__':
         min_nr_of_text_in_cluster=20,
         words_to_remove_before_clustering = to_remove,
         get_clustering_model = cluster_transformers.get_agglomerative_distance_threshold,
-        high_level_cluster_threshold=0.28)
+        high_level_cluster_threshold=0.28,
+        sort_high_level_clusters=False, # Just backward compatibility
+        n_reduced_dimensions=False) # Not reducing dimensions here. In most cases, it is however recommended to reduce dimensions.
     
+    #pickled_files_name="diabetes_svt.pkl",
     
 
 

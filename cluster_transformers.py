@@ -31,6 +31,7 @@ from collections import Counter
 import glob
 import os
 import sys
+import json
 
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.cluster import DBSCAN
@@ -38,10 +39,14 @@ from sklearn.cluster import HDBSCAN
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.tokenize import word_tokenize
 import numpy as np
 from sentence_transformers import SentenceTransformer
+import matplotlib.pyplot as plt
+
 
 
 #https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.centroid.html
@@ -153,8 +158,23 @@ def get_centroids_dict(labels, embeddings):
         centroids_dict[key] = c
         
     return centroids_dict
+  
+
+def get_tsne_for_centroids(centroids_dimensionallity_reduced_embeddings):
+    tsne_model = TSNE(n_components=1, random_state=0, perplexity=min(5, len(centroids_dimensionallity_reduced_embeddings)), metric="cosine")
+    tsne_reduced = tsne_model.fit_transform(centroids_dimensionallity_reduced_embeddings)
+    min_tsne_reduced = float(min(tsne_reduced))
+    tsne_reduced_positive = [float(x) - min_tsne_reduced for x in tsne_reduced]
+    max_tsne_reduced = max(tsne_reduced_positive)
     
-def get_high_level_clusters(high_level_cluster_threshold, centroids_dict):
+    tsne_reduced_normalised = sorted([(x/max_tsne_reduced, i+1) for (i, x) in enumerate(tsne_reduced_positive)])
+    tsne_ordered = [x[1] for x in tsne_reduced_normalised]
+    viridis = plt.cm.viridis
+    colour_values = viridis([x[0] for x in tsne_reduced_normalised])
+    
+    return tsne_ordered, colour_values
+    
+def get_high_level_clusters(high_level_cluster_threshold, centroids_dict, n_reduced_dimensions, sort_high_level_clusters):
    # Meta high-level clustering
     db = AgglomerativeClustering(metric="cosine", distance_threshold=high_level_cluster_threshold, n_clusters=None, linkage="average")
     centroid_labels_external_nrs = []
@@ -166,15 +186,29 @@ def get_high_level_clusters(high_level_cluster_threshold, centroids_dict):
             centorid_embeddings.append(centroids_dict[centroid_label])
         
     if len(centorid_embeddings) > 1: # Otherwise it will not work if only one cluster is created
-        centroid_clusters = db.fit(centorid_embeddings)
+    
+        if n_reduced_dimensions:
+            pca = PCA(n_components=min(n_reduced_dimensions, len(centorid_embeddings)), svd_solver="full") # Reduce the dimension to the number of topics extracted, or smaller
+            centroids_dimensionallity_reduced_embeddings = pca.fit_transform(centorid_embeddings)
+            
+        else:
+            centroids_dimensionallity_reduced_embeddings = centorid_embeddings
+    
+        # Do the high-level clustering
+        centroid_clusters = db.fit(centroids_dimensionallity_reduced_embeddings)
         centroid_labels_external_clusters = centroid_clusters.labels_
+        
+        # Also make a tsne projektion (not using the high-level clusters)
+        tsne_ordered, colour_values = get_tsne_for_centroids(np.array(centroids_dimensionallity_reduced_embeddings))
+        
+        
     else:
         centroid_labels_external_clusters = [1]
+        tsne_ordered = [1]
         
+    
     timelines_external_cluster_format_dict = {}
-   
     for external_cluster_nr, high_level_cluster_nr in zip(centroid_labels_external_nrs, centroid_labels_external_clusters):
-        
         if high_level_cluster_nr not in timelines_external_cluster_format_dict:
             timelines_external_cluster_format_dict[high_level_cluster_nr] = []
         timelines_external_cluster_format_dict[high_level_cluster_nr].append(external_cluster_nr)
@@ -182,18 +216,36 @@ def get_high_level_clusters(high_level_cluster_threshold, centroids_dict):
     if OUTLIER_NUMBER in centroids_dict:
         timelines_external_cluster_format_dict[OUTLIER_NUMBER] = [1]
     
+    # Make a tsne projektion for the high-level clusters, to order these
+    centroids_for_high_level_clusters = get_centroids_dict(centroid_labels_external_clusters, centroids_dimensionallity_reduced_embeddings)
+    high_level_centroid_embeddings = []
+    for high_level_centroid_label in sorted(centroids_for_high_level_clusters.keys()):
+        high_level_centroid_embeddings.append(centroids_for_high_level_clusters[high_level_centroid_label])
+            
+    high_level_centroid_embeddings = np.array(high_level_centroid_embeddings)
+    print(len(high_level_centroid_embeddings))
+    tsne_ordered_high_level_clusters, colour_values_high_level_clusters = get_tsne_for_centroids(high_level_centroid_embeddings)
+    print("timelines_external_cluster_format_dict", timelines_external_cluster_format_dict)
+    print("tsne_ordered_high_level_clusters", tsne_ordered_high_level_clusters)
     
-    # Clusters with only one member is counted as an outlier
-    outlier_list = []
     timelines_external_cluster_format_list = []
-    for label_list in timelines_external_cluster_format_dict.values():
-        if len(label_list) > 1:
+    if sort_high_level_clusters:
+        for high_level_cluster_nr in tsne_ordered_high_level_clusters:
+            label_list = timelines_external_cluster_format_dict[high_level_cluster_nr-1] #Because Labels from clustering starts with 1?
             timelines_external_cluster_format_list.append(label_list)
-        else:
-            outlier_list.extend(label_list)
-
-    timelines_external_cluster_format_list.extend(outlier_list)
-    return timelines_external_cluster_format_list
+            
+    else: # TODO: This option is saved for backward compatability. Perhaps remove later
+        outlier_list = []
+     # Clusters with only one member is counted as an outlier, and placed last
+        for label_list in timelines_external_cluster_format_dict.values():
+            if len(label_list) > 1:
+                timelines_external_cluster_format_list.append(label_list)
+            else:
+                outlier_list.extend(label_list)
+        timelines_external_cluster_format_list.extend(outlier_list)
+        
+        
+    return timelines_external_cluster_format_list, tsne_ordered, colour_values, colour_values_high_level_clusters
 
 
 #############################################################
@@ -253,9 +305,9 @@ def read_files(main_path, to_cluster, to_cluster_raw_texts, preprocess_method, w
             print(int(100*file_nr/len(files)), "%")
           
           
-#################################
-# Helper functions for
-##################################
+###################################################################################################
+# Helper functions for constructing typical sentences for each topic and and labels for each topic
+####################################################################################################
 
 def get_typical_sentences_for_topics(merged_labels, to_cluster, corpus_path, cos_texts, to_cluster_raw_texts):
 
@@ -325,11 +377,19 @@ def get_labels_for_topics(merged_labels, to_cluster, stop_words, min_occ_in_corp
     print("TEXT_DICT.keys()", text_dict.keys())
     return topic_keywords_dict
         
+###################################################################################################
+# Helper functions for writing output to files
+####################################################################################################
+
+
+def write_to_file_as_str(file_name, content):
+    print("Save high-level clusters in ", file_name)
+    with open(file_name, "w") as fn:
+        fn.write(json.dumps(content))
+            
 # As a default, clusters with less than min_nr_of_text_in_cluster will be moved to another cluster with the closest centroid
 # If 'put_small_clusters_in_outlier_category' is set to True, they will instead all be moved to an outlier-category.
 # If 'exclude_outlier_label' is set to True, this outlier category will not be included in the results.
-
-
 def encode_sentences(main_path, output_dir, n_clusters,
         transformer_name=DEAULT_TRANSFORMER_MODEL,
         transform_filename_method=None,
@@ -347,7 +407,9 @@ def encode_sentences(main_path, output_dir, n_clusters,
         high_level_cluster_threshold=0.5,
         pickled_files_name=None,
         file_name_to_save_text_and_embeddings=None,
-        exclude_file_method=None):
+        exclude_file_method=None,
+        n_reduced_dimensions=200,
+        sort_high_level_clusters=True):
     """The main function for clustering files found in "main_path" and write the results in "output_dir".
 
     Args:
@@ -367,8 +429,8 @@ def encode_sentences(main_path, output_dir, n_clusters,
     min_nr_of_text_in_cluster: Minimum number of texts in a cluster for this cluster to be retained. Default is 2 texts.
     words_to_remove_before_clustering: Words that are removed before the texts are encoded. 
     Default is empty list.
-    preprocess_method: Method for pre-processing the texts. Default None
-    get_clustering_model= The method to use for clustering. The default is "default_get_cluster_model",
+    preprocess_method: Method for pre-processing the texts. default = None
+    get_clustering_model= The method to use for clustering. The default is default_get_cluster_model,
     put_small_clusters_in_outlier_category: If clusters that are too small, should be put in their own outlier category. Default is False. 
         (If False, they are merged with their closes neighbouring cluster.)
     exclude_outlier_label: If the outlier category is to be excluded from the result. Default is False,
@@ -377,8 +439,12 @@ def encode_sentences(main_path, output_dir, n_clusters,
     high_level_cluster_threshold: The maximum cosine distance when high-level clusters are to be coninued to be merge together. (Note that cosine distance is used, i.e., 1-cosine similarity) Default=0.5
     pickled_files_name: The file name for pickled texts and encodded embeddings. When giving this filename, the texts and codings saved here will be used, and the code will start direclty by clustering embeddings. WARNING: If any of the parameter settings for reading the texts and encoding the embeddings have been changed, these changes will not be put into effect, as old ones are used. Default is None.
     file_name_to_save_text_and_embeddings: If this is given, the read texts, and the embeddings created from these texts are saved in this file. Thereby, this file name can be given to pickled_files_name, and the reading of text files and encoding does not have to be done again. Default is None. (Note that not both file_name_to_save_text_and_embeddings and pickled_files_name can be given.)
-    exclude_file_method: A method for deciding files to be included. Default is None.
-
+    exclude_file_method: method, default = None.
+        A method for deciding files to be included.
+    n_reduced_dimensions: int, default=200
+        Dimensions to use for a PCA dimensionality reduction before the transformers are clustered. If None, no PCA dimensionality reduction is carried out.
+    sort_high_level_clusters: boolean, default=True
+        Whether to sort the high-level clusters (by making a TSNE projection of their centroids).
     """
     
     
@@ -448,7 +514,13 @@ def encode_sentences(main_path, output_dir, n_clusters,
             to_cluster, to_cluster_raw_texts, embeddings = pickle.load(load_file)
  
     print("Clustering")
-    clustering = get_clustering_model(n_clusters, min_nr_of_text_in_cluster).fit(embeddings)
+    if n_reduced_dimensions:
+        print("Reduce dimensions")
+        pca = PCA(n_components=min(n_reduced_dimensions, len(embeddings)), svd_solver="full") # If there are very few texts that are to be extract topics from, use the number of texts as the dimension
+        dimensionallity_reduced_embeddings = pca.fit_transform(embeddings)
+    else:
+        dimensionallity_reduced_embeddings = embeddings
+    clustering = get_clustering_model(n_clusters, min_nr_of_text_in_cluster).fit(dimensionallity_reduced_embeddings)
     
     # Collect all embeddings for a topic, to be able to create a centroid
     print("Computing centroids")
@@ -480,15 +552,14 @@ def encode_sentences(main_path, output_dir, n_clusters,
 
  
     # Construct the high-level-clusters
-    timelines_external_cluster_format_list = get_high_level_clusters(high_level_cluster_threshold, centroids_dict)
-    # And write the high-level clusters to a file
+    high_level_clusters, tsne_ordered, colour_values, colour_values_high_level_clusters = get_high_level_clusters(high_level_cluster_threshold, centroids_dict, n_reduced_dimensions, sort_high_level_clusters)
+    # And write the high-level clusters to a file, one time (and the same content, but different filename for each path)
     for corpus_path in main_path:
-        output_file_name_high_level_clustering = os.path.join(output_dir, os.path.basename(corpus_path + "_high_level_clusters.txt"))
-        print("Save high-level clusters in ", output_file_name_high_level_clustering)
-        with open(output_file_name_high_level_clustering, "w") as ofnhlc:
-            ofnhlc.write(str(timelines_external_cluster_format_list))
-    
-        
+        write_to_file_as_str(os.path.join(output_dir, os.path.basename(corpus_path + "_high_level_clusters.txt")), high_level_clusters)
+        write_to_file_as_str(os.path.join(output_dir, os.path.basename(corpus_path + "_ordered_clusters.txt")), tsne_ordered)
+        write_to_file_as_str(os.path.join(output_dir, os.path.basename(corpus_path + "_colour_values.txt")), colour_values.tolist())
+        write_to_file_as_str(os.path.join(output_dir, os.path.basename(corpus_path + "_colour_values_high_level_clusters.txt")), colour_values_high_level_clusters.tolist())
+            
     # Wikipedia explanation for cosine similarity:
     # For example, two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0,
     # and two opposite vectors have a similarity of −1. In some contexts, the component values of the vectors cannot be
