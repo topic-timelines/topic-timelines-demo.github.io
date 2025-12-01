@@ -41,7 +41,8 @@ if __name__ == '__main__':
         get_clustering_model = cluster_transformers.get_agglomerative_distance_threshold,
         high_level_cluster_threshold=0.28,
         sort_high_level_clusters=False, # Just backward compatibility
-        n_reduced_dimensions=False) # Not reducing dimensions here. In most cases, it is however recommended to reduce dimensions.
+        n_reduced_dimensions=False,
+        use_centroid_to_merge_small_clusters=True) # Not reducing dimensions here. In most cases, it is however recommended to reduce dimensions.
     
     #pickled_files_name="diabetes_svt.pkl",
     

@@ -93,7 +93,7 @@ def get_kmeans(n_clusters, min_nr_of_text_in_cluster):
 # Helper functions for creating the clusters
 ############################################
 
-def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category):
+def merge_one_label_category(merged_labels, dimensionallity_reduced_embeddings, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category, use_centroid_to_merge_small_clusters):
     count_labels = Counter(merged_labels)
     len_items = len(count_labels.items())
     if len_items % 100 == 0:
@@ -111,6 +111,7 @@ def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids
     centroid_for_cluster_to_remove = centroids_dict[min_cluster_label]
     centroids_dict.pop(min_cluster_label)
         
+    """
     if put_small_clusters_in_outlier_category:
         label_to_replace_with = OUTLIER_NUMBER
     else: # Compute the cosine similarity from the centroid of the cluster to remove, to all other centroids
@@ -124,13 +125,32 @@ def merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids
             cosine_similarity_values.append((cos_sim, label_class))
         sorted_cos_values = sorted(cosine_similarity_values, reverse=True) # Sort, with the largest similarity first
         label_to_replace_with = sorted_cos_values[0][1] # Replace with the label that is most similar
+    """
     
     new_merged_labels = []
-    for el in merged_labels:
-        if el == min_cluster_label:
-            new_merged_labels.append(label_to_replace_with) # Replace with new label
+    for label, embedding in zip(merged_labels, dimensionallity_reduced_embeddings):
+        if label == min_cluster_label:
+            if put_small_clusters_in_outlier_category:
+                new_merged_labels.append(OUTLIER_NUMBER)
+            else: # Find the nearest other cluster centroid for this embedding
+                cosine_similarity_values = []
+                
+                if use_centroid_to_merge_small_clusters: # Only left for backward compatibilty remove eventually
+                    embedding = centroid_for_cluster_to_remove # Only left for backward compatibilty remove eventually
+                
+                for label_class, centroid in centroids_dict.items():
+                    # Wikipedia explanation for cosine similarity:
+                    # For example, two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0,
+                    # and two opposite vectors have a similarity of −1. In some contexts, the component values of the vectors cannot be
+                    # negative, in which case the cosine similarity is bounded in [0,1]
+                    cos_sim = cosine_similarity([embedding], [centroid])[0][0]
+                    cosine_similarity_values.append((cos_sim, label_class))
+                
+                sorted_cos_values = sorted(cosine_similarity_values, reverse=True) # Sort, with the largest similarity first
+                label_to_replace_with = sorted_cos_values[0][1] # Replace with the label that is most similar
+                new_merged_labels.append(label_to_replace_with) # Replace with new label
         else:
-            new_merged_labels.append(el) # Keep the original label
+            new_merged_labels.append(label) # Keep the original label
             
     #print("Replaced ", min_cluster_label, "with", label_to_replace_with)
     return new_merged_labels, centroids_dict, min_cluster_label
@@ -161,10 +181,16 @@ def get_centroids_dict(labels, embeddings):
   
 
 def get_tsne_for_centroids(centroids_dimensionallity_reduced_embeddings):
-    tsne_model = TSNE(n_components=1, random_state=0, perplexity=min(5, len(centroids_dimensionallity_reduced_embeddings)), metric="cosine")
+    tsne_model = TSNE(n_components=1, random_state=0, perplexity=min(5, len(centroids_dimensionallity_reduced_embeddings)-1), metric="cosine")
     tsne_reduced = tsne_model.fit_transform(centroids_dimensionallity_reduced_embeddings)
-    min_tsne_reduced = float(min(tsne_reduced))
-    tsne_reduced_positive = [float(x) - min_tsne_reduced for x in tsne_reduced]
+    
+    if min(tsne_reduced) < 0:
+        below_zero = 0 - float(min(tsne_reduced))
+        print("below_zero", below_zero)
+    else:
+        below_zero = 0
+    
+    tsne_reduced_positive = [float(x) + below_zero for x in tsne_reduced]
     max_tsne_reduced = max(tsne_reduced_positive)
     
     tsne_reduced_normalised = sorted([(x/max_tsne_reduced, i+1) for (i, x) in enumerate(tsne_reduced_positive)])
@@ -378,14 +404,86 @@ def get_labels_for_topics(merged_labels, to_cluster, stop_words, min_occ_in_corp
     return topic_keywords_dict
         
 ###################################################################################################
-# Helper functions for writing output to files
+# Helper functions for formatting and writing output to files
 ####################################################################################################
 
+def get_row_to_write_for_text_multi_topic(text, label, filename, date, all_labels_list, cos_dict, mapping_cluster_label_column_nr, topic_keywords_dict, min_cos_to_include, cos_for_main_cluster, proportion_cut_off_secondary_topics):
+        
+    labels_list = [0]*len(all_labels_list)
+    keyword_list = ["-"]*len(all_labels_list)
+    for nr, label_category in enumerate(all_labels_list):
+    
+        cos = cos_dict[label_category] - min_cos_to_include
+        if cos <= 0 and label_category == label:
+            cos = 0.1 # Always include current label
+        
+        if cos < cos_for_main_cluster*proportion_cut_off_secondary_topics:
+            cos = 0 # Only iclude the secondary topics that are fairly large
+            
+        if cos > 0:
+            labels_list[nr] = cos # Add one weight for topic, not only the main one
+        
+        # Just consistency check
+        assert(mapping_cluster_label_column_nr[label_category] == nr)
+        
+        if label == label_category: # Add keywords for the main category
+            topic_words_in_text = []
+            for word in topic_keywords_dict[label_category]:
+                if word.lower() in text.lower(): # TODO: Could be done more robustly. Currently not used by visualisation
+                    topic_words_in_text.append(word.replace(" ","_"))
+            
+            topic_words_in_text_str = "/".join(topic_words_in_text)
+            keyword_list[nr] = topic_words_in_text_str
+    
+    output_row = []
+    output_row.append(filename)
+    output_row.append(date)
+    output_row.extend(labels_list)
+    output_row.append("") # Is used by topic-timelines as an indication that cluster strength values are over
+    output_row.extend(keyword_list)
+    to_write = "\t".join([str(el) for el in output_row]) + "\n"
+    return to_write
+    
+def get_row_to_write_for_text(text, label, filename, date, all_labels_list, cos, mapping_cluster_label_column_nr, topic_keywords_dict):
+        
+    labels_list = [0]*len(all_labels_list)
+    keyword_list = ["-"]*len(all_labels_list)
+    for nr, label_category in enumerate(all_labels_list):
+        if label == label_category:
+            labels_list[nr] = cos
+            
+            # Just consistency check
+            assert(mapping_cluster_label_column_nr[label_category] == nr)
+            
+            topic_words_in_text = []
+            for word in topic_keywords_dict[label_category]:
+                if word.lower() in text.lower(): # TODO: Could be done more robustly. Currently not used by visualisation
+                    topic_words_in_text.append(word.replace(" ","_"))
+            
+            topic_words_in_text_str = "/".join(topic_words_in_text)
+            keyword_list[nr] = topic_words_in_text_str
+    
+    output_row = []
+    output_row.append(filename)
+    output_row.append(date)
+    output_row.extend(labels_list)
+    output_row.append("") # Is used by topic-timelines as an indication that cluster strength values are over
+    output_row.extend(keyword_list)
+    to_write = "\t".join([str(el) for el in output_row]) + "\n"
+    return to_write
+    
 
 def write_to_file_as_str(file_name, content):
     print("Save high-level clusters in ", file_name)
     with open(file_name, "w") as fn:
         fn.write(json.dumps(content))
+        
+# The list item should already contain an ending "\n"
+def write_list_to_file(file_name, list_to_write):
+    print("Save in", file_name)
+    with open(file_name, "w") as fn:
+        for l in list_to_write:
+            fn.write(l)
             
 # As a default, clusters with less than min_nr_of_text_in_cluster will be moved to another cluster with the closest centroid
 # If 'put_small_clusters_in_outlier_category' is set to True, they will instead all be moved to an outlier-category.
@@ -409,7 +507,9 @@ def encode_sentences(main_path, output_dir, n_clusters,
         file_name_to_save_text_and_embeddings=None,
         exclude_file_method=None,
         n_reduced_dimensions=200,
-        sort_high_level_clusters=True):
+        sort_high_level_clusters=True,
+        proportion_cut_off_secondary_topics=None,
+        use_centroid_to_merge_small_clusters=False):
     """The main function for clustering files found in "main_path" and write the results in "output_dir".
 
     Args:
@@ -445,6 +545,10 @@ def encode_sentences(main_path, output_dir, n_clusters,
         Dimensions to use for a PCA dimensionality reduction before the transformers are clustered. If None, no PCA dimensionality reduction is carried out.
     sort_high_level_clusters: boolean, default=True
         Whether to sort the high-level clusters (by making a TSNE projection of their centroids).
+    proportion_cut_off_secondary_topics: float (or None), default=None
+        If a float is given, a second file with cluster results for secondary clusters is also produced. 'proportion_cut_off_secondary_topics' governs the proportion of simliarity to the second cluster centorid in relation to the similarity to first cluster centroid. (If None, no secondary clusters are produced.)
+    use_centroid_to_merge_small_clusters: boolean, default=False
+        Members of clusters that are too small, are normally moved to the with a centroid that is closest. With use_centroid_to_merge_small_clusters set to True, all members in this cluster is moved to the same cluster, the one with closest centroid to the centorid of the too small cluster.
     """
     
     
@@ -524,7 +628,7 @@ def encode_sentences(main_path, output_dir, n_clusters,
     
     # Collect all embeddings for a topic, to be able to create a centroid
     print("Computing centroids")
-    centroids_dict = get_centroids_dict(clustering.labels_, embeddings)
+    centroids_dict = get_centroids_dict(clustering.labels_, dimensionallity_reduced_embeddings)
     
     # Successively merge all categories that are too small, until no too small categories are found anymore
     merged_labels = clustering.labels_
@@ -532,7 +636,7 @@ def encode_sentences(main_path, output_dir, n_clusters,
     replaced_label = "not none"
     nr_of_too_small_clusters = 0
     while replaced_label is not None:
-        merged_labels, centroids_dict, replaced_label = merge_one_label_category(merged_labels, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category)
+        merged_labels, centroids_dict, replaced_label = merge_one_label_category(merged_labels, dimensionallity_reduced_embeddings, min_nr_of_text_in_cluster, centroids_dict, put_small_clusters_in_outlier_category, use_centroid_to_merge_small_clusters)
         nr_of_too_small_clusters+=1
     print()
     print(f"Number of clusters that were too small: {nr_of_too_small_clusters} ")
@@ -564,9 +668,9 @@ def encode_sentences(main_path, output_dir, n_clusters,
     # For example, two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0,
     # and two opposite vectors have a similarity of −1. In some contexts, the component values of the vectors cannot be
     # negative, in which case the cosine similarity is bounded in [0,1]
-    global_min_cos = 2.0 # Save global min cosine distance for centroid for text
-    cos_texts = [] # Store cosine similarity for each text, to the centroid of its cluster
-    for label, embedding in zip(merged_labels, embeddings):
+    global_min_cos = 2.0 # Save global min cosine similarity for the text
+    cos_texts = [] # Store cosine similarity for each text, to the centroid of the cluster to which the text belongs
+    for label, embedding in zip(merged_labels, dimensionallity_reduced_embeddings):
         cos = cosine_similarity([embedding], [centroids_dict[label]])[0][0] + 1 # Make it always over 0
         cos_texts.append(cos)
         if cos < global_min_cos:
@@ -574,13 +678,31 @@ def encode_sentences(main_path, output_dir, n_clusters,
                 pass
             else:
                 global_min_cos = cos
+    
+    ###
+    
+    
+    if proportion_cut_off_secondary_topics is None:
+        cos_texts_all_clusters = cos_texts # Needed, since a zip is done later with this list, so it needs content
+    else:
+        cos_texts_all_clusters  = [] # Still experimental: Store cosine similarity for each text, but to all cluster centroids in the data, not just the closest
+       
+        
+        for embedding in dimensionallity_reduced_embeddings:
+            similarity_all_clusters = {}
+            for label in list(set(merged_labels)):
+                if label != OUTLIER_NUMBER:
+                    cos = cosine_similarity([embedding], [centroids_dict[label]])[0][0] + 1 # Make it always over 0
+                    similarity_all_clusters[label] = cos
+            cos_texts_all_clusters.append(similarity_all_clusters)
+    
+    ##
+  
 
-    global_min_cos = global_min_cos - 0.001 # so that the smallest will not be 0, when subtracting
+    global_min_cos = global_min_cos - 0.1 # so that the smallest will not be 0, when subtracting
     print("Global minimal cosine simliarity + 1 (two proportional vectors have a cosine similarity of +1, two orthogonal vectors have a similarity of 0 and and two opposite vectors have a similarity of −1)", global_min_cos)
     if fixed_global_min_cos:
         global_min_cos = fixed_global_min_cos
-
-
 
     # Extract typical sentences for topics and labels for topics
     # Do it separately for each corpus in main_path
@@ -592,25 +714,33 @@ def encode_sentences(main_path, output_dir, n_clusters,
         
         topic_typical_sentences_dict = get_typical_sentences_for_topics(merged_labels, to_cluster, corpus_path, cos_texts, to_cluster_raw_texts)
         typical_sentence_per_path_dict[corpus_path] = topic_typical_sentences_dict
+        
 
     # Create the output strings, which contain the results of the clustering
     path_to_transform_method_dict = {pa:me for (pa, me) in zip(main_path, transform_filename_method)}
-    clustering_output_strs_to_subcorpus_mapping = {} # Map the strings to each subcorpus in main_path
-    mapping_old_nr_to_new_nr = {}
-    for (filename, text, m_path), label, cos in zip(to_cluster, merged_labels, cos_texts):
-        output_row = []
+    
+    clustering_output_strs_to_subcorpus_mapping = {} # Map the cluster output strings to each subcorpus in main_path
+    clustering_output_all_topics_subcorpus_mapping = {} # Experiments
+    for m_path in main_path:
+        clustering_output_strs_to_subcorpus_mapping[m_path] = []
+        clustering_output_all_topics_subcorpus_mapping[m_path] = []
         
+    # Just to use for consistency check
+    mapping_cluster_label_column_nr = {}
+    for nr, label_category in enumerate(all_labels_list):
+        mapping_cluster_label_column_nr[label_category] = nr
+    
+    for (filename, text, m_path), label, cos, cos_dict in zip(to_cluster, merged_labels, cos_texts, cos_texts_all_clusters):
         if exclude_outlier_label is True and label == OUTLIER_NUMBER:
             continue
         
         cos = cos - global_min_cos # Cut-off the lower band to make it more expressive
-            
         if not fixed_global_min_cos:
             assert(cos > 0.0)
         else:
-            if cos <= 0.01:
+            if cos <= 0.1:
                 print("Min size used for label. Perhaps decrease 'fixed_global_min_cos' ", cos)
-                cos = 0.01
+                cos = 0.1
         
         if transform_filename_method:
             date = path_to_transform_method_dict[m_path](filename)
@@ -618,74 +748,42 @@ def encode_sentences(main_path, output_dir, n_clusters,
             # TODO: Add default behavious, for transforming filename to date, e.g. just remove .txt
             raise NotImplementedError("transform_filename_method must currently always be provided. No default method for transforming from filename to date")
         
-        labels_list = [0]*len(all_labels_list)
-        keyword_list = ["-"]*len(all_labels_list)
-        for nr, label_category in enumerate(all_labels_list):
-            if label == label_category:
-                labels_list[nr] = cos
-                
-                # Just consistency check
-                if label_category in mapping_old_nr_to_new_nr:
-                    assert(mapping_old_nr_to_new_nr[label_category] == nr)
-                else:
-                    mapping_old_nr_to_new_nr[label_category] = nr
-                    
-                topic_words_in_text = []
-                topic_keywords_dict = topic_keywords_per_path_dict[m_path]
-                for word in topic_keywords_dict[label_category]:
-                    if word.lower() in text.lower(): # TODO: Could be done more robustly. Currently not used by visualisation
-                        topic_words_in_text.append(word.replace(" ","_"))
-                
-                
-                topic_words_in_text_str = "/".join(topic_words_in_text)
-                keyword_list[nr] = topic_words_in_text_str
-                
-        output_row.append(filename)
-        output_row.append(date)
-        output_row.extend(labels_list)
-        output_row.append("") # Is used by topic-timelines as an indication that cluster strength values are over
-        output_row.extend(keyword_list)
+        topic_keywords_dict = topic_keywords_per_path_dict[m_path]
         
-
-        to_write = "\t".join([str(el) for el in output_row]) + "\n"
-        
-        # Make one list of cluster-info to write for each main path
-        if m_path not in clustering_output_strs_to_subcorpus_mapping:
-            clustering_output_strs_to_subcorpus_mapping[m_path] = []
+        # Retrieve clustering results for this text
+        to_write = get_row_to_write_for_text(text, label, filename, date, all_labels_list, cos, mapping_cluster_label_column_nr, topic_keywords_dict)
+        # and match the results of the text to its subcorpus
         clustering_output_strs_to_subcorpus_mapping[m_path].append(to_write)
+        
+        # Still experimental
+        if proportion_cut_off_secondary_topics:
+            min_cos_to_include = global_min_cos
+            if fixed_global_min_cos:
+                min_cos_to_include = fixed_global_min_cos
+            to_write_results_all_topics = get_row_to_write_for_text_multi_topic(text, label, filename, date, all_labels_list, cos_dict, mapping_cluster_label_column_nr, topic_keywords_dict, min_cos_to_include, cos, proportion_cut_off_secondary_topics)
+            clustering_output_all_topics_subcorpus_mapping[m_path].append(to_write_results_all_topics)
         
     # Write cluster results for each sub-corpus
     for corpus_path in main_path:
-        output_file_name = os.path.join(output_dir, os.path.basename(corpus_path) + "_clustered.txt")
-        print("Saves result in", output_file_name)
-       
-        with open(output_file_name, "w") as ofn:
-            for line in clustering_output_strs_to_subcorpus_mapping[corpus_path]:
-                ofn.write(line)
-       
+        write_list_to_file(os.path.join(output_dir, os.path.basename(corpus_path) + "_clustered.txt"), clustering_output_strs_to_subcorpus_mapping[corpus_path])
+        write_list_to_file(os.path.join(output_dir, os.path.basename(corpus_path) + "_clustered_multi_topic.txt"), clustering_output_all_topics_subcorpus_mapping[corpus_path])
+        
     print("created", len(all_labels_list), "topics")
     print("all_labels_list", all_labels_list)
     
-    # Write the typical texts and labels for each topic
+    # Write the labels and typical texts for each subcorpus and each topic
     for corpus_path in main_path:
+    
         cluster_labels = []
         for nr, label_category in enumerate(all_labels_list):
-            assert(mapping_old_nr_to_new_nr[label_category] == nr)
+            assert(mapping_cluster_label_column_nr[label_category] == nr)
             to_write = "\t".join([el.replace(" ", "_") for el in topic_keywords_per_path_dict[corpus_path][label_category]]) + "\n"
             cluster_labels.append(to_write)
+        write_list_to_file(os.path.join(output_dir, os.path.basename(corpus_path) + "_cluster_labels.txt"), cluster_labels)
+    
+        typical_texts = [typical_sentence_per_path_dict[corpus_path][label_category] + "\n" for label_category in all_labels_list]
+        write_list_to_file(os.path.join(output_dir, os.path.basename(corpus_path) + "_typical_texts.txt"), typical_texts)
+            
 
-        output_file_name_clusters = os.path.join(output_dir, os.path.basename(corpus_path) + "_cluster_labels.txt")
-        print("Save cluster labels in", output_file_name_clusters)
-        with open(output_file_name_clusters, "w") as ofnc:
-            for cluster_label in cluster_labels:
-                ofnc.write(cluster_label)
 
-        typical_texts = []
-        for nr, label_category in enumerate(all_labels_list):
-            typical_texts.append(typical_sentence_per_path_dict[corpus_path][label_category])
-        output_file_name_typical_texts = os.path.join(output_dir, os.path.basename(corpus_path) + "_typical_texts.txt")
-        print("Save typical texts in", output_file_name_typical_texts)
-        with open(output_file_name_typical_texts, "w") as ofnc:
-            for t in typical_texts:
-                ofnc.write(t + "\n")
 
